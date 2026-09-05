@@ -227,8 +227,9 @@ def precision_recall_curve(
             - dict of form {"name": {"probs_positive": np.array, **trace_kwargs}}
         df (pd.DataFrame | None): Optional DataFrame containing targets and
             probs_positive columns
-        no_skill (dict[str, Any] | False): Options for no-skill baseline
-            or False to hide it. Commonly needed keys:
+        no_skill (dict[str, Any] | False): Options for no-skill baselines computed
+            from each classifier's valid rows, or False to hide them. Identical
+            baselines share a line. Commonly needed keys:
             - show_legend: bool = True
             - annotation: dict = None (plotly annotation dict to label the line)
             All other keys are passed to fig.add_scatter()
@@ -241,10 +242,13 @@ def precision_recall_curve(
     targets, curves_dict = _standardize_input(targets, probs_positive, df)
     targets = np.asarray(targets)
 
+    baselines: dict[float, list[str]] = {}
+
     def build_trace(
         name: str, idx: int, tgt: np.ndarray, probs: np.ndarray
     ) -> dict[str, Any]:
         prec_curve, recall_curve, thresholds = skm.precision_recall_curve(tgt, probs)
+        baselines.setdefault(float(np.mean(tgt == 1)), []).append(name)
         # f1 scores for each threshold
         f1_curve = 2 * (prec_curve * recall_curve) / (prec_curve + recall_curve)
         f1_curve = np.nan_to_num(f1_curve)  # Handle division by zero
@@ -288,12 +292,16 @@ def precision_recall_curve(
         no_skill = dict(no_skill or {})
         no_skill_line = no_skill.pop("line", {})
         no_skill_anno = no_skill.pop("annotation", {})
-        fig.add_hline(
-            y=np.mean(targets[~pd.isna(targets)] == 1),
-            line=dict(dash="dash", color="gray") | no_skill_line,
-            showlegend=False,
-            annotation=dict(text="No skill", font=dict(color="gray")) | no_skill_anno,
-        )
+        for prevalence, names in baselines.items():
+            label = (
+                f"No skill ({', '.join(names)})" if len(baselines) > 1 else "No skill"
+            )
+            fig.add_hline(
+                y=prevalence,
+                line=dict(dash="dash", color="gray") | no_skill_line,
+                showlegend=False,
+                annotation=dict(text=label, font=dict(color="gray")) | no_skill_anno,
+            )
 
     fig.layout.legend.update(yanchor="bottom", y=0, xanchor="left", x=0)
     fig.layout.update(xaxis_title="Recall", yaxis_title="Precision")

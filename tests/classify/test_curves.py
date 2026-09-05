@@ -213,6 +213,38 @@ def test_no_skill_line(targets: list[int]) -> None:
     assert fig_roc_custom.data[1].line.color == "red"  # Custom color
 
 
+@pytest.mark.parametrize(
+    ("probs", "expected_baselines"),
+    [
+        ([np.nan, 0.9, 0.8, 0.2], {"No skill": 1.0}),
+        (
+            {"A": [0.1, 0.9, 0.8, 0.2], "B": [np.nan, 0.8, 0.3, 0.9]},
+            {"No skill (A)": 2 / 3, "No skill (B)": 1.0},
+        ),
+        (
+            {"A": [np.nan, 0.9, 0.8, 0.2], "B": [np.nan, 0.8, 0.3, 0.9]},
+            {"No skill": 1.0},
+        ),
+    ],
+)
+def test_no_skill_line_missing_values(
+    probs: list[float] | dict[str, list[float]], expected_baselines: dict[str, float]
+) -> None:
+    """Match baselines to each curve's valid rows and collapse equal prevalences."""
+    targets = [0, 1, np.nan, 1]
+    fig = precision_recall_curve(targets, probs, no_skill={"line": {"color": "red"}})
+    assert {
+        anno.text: shape.y0
+        for anno, shape in zip(fig.layout.annotations, fig.layout.shapes, strict=True)
+    } == expected_baselines
+    assert {trace.y[0] for trace in fig.data} == set(expected_baselines.values())
+    assert all(
+        shape.y0 == shape.y1 and shape.line.color == "red"
+        for shape in fig.layout.shapes
+    )
+    assert not precision_recall_curve(targets, probs, no_skill=False).layout.shapes
+
+
 @pytest.mark.parametrize("curve_func", [precision_recall_curve, roc_curve])
 def test_dict_with_dataframe_raises_error(
     curve_func: Callable[..., go.Figure],
