@@ -61,8 +61,11 @@ def test_widget_creates_view_model(multi_frame_trajectory: dict[str, Any]) -> No
     json.dumps(widget.trajectory)
 
 
+@pytest.mark.parametrize("input_format", ["dict", "list", "tuple", "structure"])
 def test_widget_trajectory_updates(
-    multi_frame_trajectory: dict[str, Any], fe3co4_disordered: Structure
+    multi_frame_trajectory: dict[str, Any],
+    fe3co4_disordered: Structure,
+    input_format: str,
 ) -> None:
     """Widget must handle trajectory updates correctly."""
     widget = TrajectoryWidget()
@@ -83,7 +86,12 @@ def test_widget_trajectory_updates(
         "frames": [updated_structure, updated_structure],
         "metadata": {"temperature": np.int64(300)},
     }
-    widget.trajectory = new_trajectory
+    widget.trajectory = {
+        "dict": new_trajectory,
+        "list": new_trajectory["frames"],
+        "tuple": tuple(new_trajectory["frames"]),
+        "structure": updated_structure,
+    }[input_format]
     expected_structure = json.loads(json.dumps(updated_structure.as_dict()))
     assert widget.trajectory == {
         "frames": [
@@ -92,9 +100,9 @@ def test_widget_trajectory_updates(
                 "step": step_idx,
                 "metadata": {"energy": -1.5},
             }
-            for step_idx in range(2)
+            for step_idx in range(1 if input_format == "structure" else 2)
         ],
-        "metadata": {"temperature": 300},
+        "metadata": {"temperature": 300} if input_format == "dict" else {},
     }
     json.dumps(widget.get_state()["trajectory"])
     assert new_trajectory["frames"][0] is updated_structure
@@ -103,6 +111,9 @@ def test_widget_trajectory_updates(
     widget.trajectory = None
     assert widget.trajectory is None
     assert widget.current_step_idx == 2
+    with pytest.raises(TypeError, match="Unsupported trajectory type"):
+        widget.trajectory = "invalid trajectory"
+    assert widget.trajectory is None
 
 
 def test_widget_complete_lifecycle(

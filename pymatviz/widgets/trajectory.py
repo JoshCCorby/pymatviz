@@ -55,7 +55,7 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
 
     # display options shared with StructureWidget live in StructureVizTraits
 
-    trajectory = tl.Dict(allow_none=True).tag(sync=True)
+    trajectory = tl.Any(default_value=None, allow_none=True).tag(sync=True)
     current_step_idx = tl.Int(0).tag(sync=True)
 
     # Layout
@@ -98,16 +98,16 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
                 ]
             **kwargs: Additional widget properties
         """
-        # Convert non-dict inputs before the Dict trait validates their type.
-        if trajectory is not None and not isinstance(trajectory, dict):
-            trajectory = self._normalize_trajectory(trajectory)
-
         super().__init__(widget_type="trajectory", trajectory=trajectory, **kwargs)
 
     @tl.validate("trajectory")
     def _validate_trajectory(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
         """Normalize constructor data and later assignments before syncing to JS."""
-        return self._normalize_trajectory(proposal["value"])
+        from pymatviz.widgets._normalize import normalize_plot_json
+
+        return normalize_plot_json(
+            self._normalize_trajectory(proposal["value"]), "trajectory"
+        )
 
     def _to_structure_dict(self, structure_input: Any) -> tuple[dict[str, Any], Any]:
         """Convert structure-like input to dict and metadata source object."""
@@ -192,7 +192,6 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
             return None
 
         from pymatviz.process_data import is_structure_like
-        from pymatviz.widgets._normalize import normalize_plot_json
 
         if isinstance(trajectory, dict):
             frames_data = trajectory.get("frames")
@@ -206,10 +205,8 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
                     input_metadata = trajectory.get("metadata")
                     if isinstance(input_metadata, dict):
                         normalized_trajectory["metadata"] = input_metadata
-                return normalize_plot_json(normalized_trajectory, "trajectory")
-            return normalize_plot_json(
-                self._complete_trajectory_dict(trajectory), "trajectory"
-            )
+                return normalized_trajectory
+            return self._complete_trajectory_dict(trajectory)
 
         if isinstance(trajectory, (list, tuple)):
             frames: list[dict[str, Any]] = []
@@ -226,11 +223,7 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
 
                 metadata = properties or self._extract_object_metadata(metadata_source)
                 if metadata:
-                    # convert numpy arrays/scalars to JSON-safe primitives so the
-                    # frontend receives numeric arrays, not stringified reprs
-                    frame["metadata"] = normalize_plot_json(
-                        metadata, "trajectory.frame.metadata"
-                    )
+                    frame["metadata"] = metadata
 
                 frames.append(frame)
 
@@ -243,9 +236,7 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
             frame: dict[str, Any] = {"structure": structure_dict, "step": 0}
             metadata = self._extract_object_metadata(metadata_source)
             if metadata:
-                frame["metadata"] = normalize_plot_json(
-                    metadata, "trajectory.frame.metadata"
-                )
+                frame["metadata"] = metadata
             return {"frames": [frame], "metadata": {}}
 
         raise TypeError(
