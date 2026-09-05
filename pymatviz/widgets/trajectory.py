@@ -98,10 +98,16 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
                 ]
             **kwargs: Additional widget properties
         """
-        if trajectory is not None:  # Convert trajectory objects if needed
+        # Convert non-dict inputs before the Dict trait validates their type.
+        if trajectory is not None and not isinstance(trajectory, dict):
             trajectory = self._normalize_trajectory(trajectory)
 
         super().__init__(widget_type="trajectory", trajectory=trajectory, **kwargs)
+
+    @tl.validate("trajectory")
+    def _validate_trajectory(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize constructor data and later assignments before syncing to JS."""
+        return self._normalize_trajectory(proposal["value"])
 
     def _to_structure_dict(self, structure_input: Any) -> tuple[dict[str, Any], Any]:
         """Convert structure-like input to dict and metadata source object."""

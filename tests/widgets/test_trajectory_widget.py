@@ -78,10 +78,31 @@ def test_widget_trajectory_updates(
     assert widget.current_step_idx == 2
 
     # Test trajectory update (step doesn't reset automatically)
-    new_trajectory = {"frames": [fe3co4_disordered, fe3co4_disordered]}
+    updated_structure = fe3co4_disordered.copy(properties={"energy": -1.5})
+    new_trajectory = {
+        "frames": [updated_structure, updated_structure],
+        "metadata": {"temperature": np.int64(300)},
+    }
     widget.trajectory = new_trajectory
-    assert widget.trajectory == new_trajectory
+    expected_structure = json.loads(json.dumps(updated_structure.as_dict()))
+    assert widget.trajectory == {
+        "frames": [
+            {
+                "structure": expected_structure,
+                "step": step_idx,
+                "metadata": {"energy": -1.5},
+            }
+            for step_idx in range(2)
+        ],
+        "metadata": {"temperature": 300},
+    }
+    json.dumps(widget.get_state()["trajectory"])
+    assert new_trajectory["frames"][0] is updated_structure
+    assert isinstance(new_trajectory["metadata"]["temperature"], np.int64)
     assert widget.current_step_idx == 2  # Remains unchanged
+    widget.trajectory = None
+    assert widget.trajectory is None
+    assert widget.current_step_idx == 2
 
 
 def test_widget_complete_lifecycle(
@@ -112,7 +133,10 @@ def test_widget_complete_lifecycle(
     # Test trajectory update
     new_trajectory = {"frames": [fe3co4_disordered] * 10}
     widget.trajectory = new_trajectory
-    assert widget.trajectory == new_trajectory
+    expected_structure = json.loads(json.dumps(fe3co4_disordered.as_dict()))
+    assert [frame["structure"] for frame in widget.trajectory["frames"]] == [
+        expected_structure
+    ] * 10
 
     # Test state persistence
     state = {
@@ -129,12 +153,7 @@ def test_widget_complete_lifecycle(
 
     # Verify state preservation
     for key, value in state.items():
-        if key != "trajectory":
-            assert getattr(restored_widget, key) == value
-
-    restored_trajectory = restored_widget.trajectory
-    assert restored_trajectory is not None
-    assert len(restored_trajectory["frames"]) == len(state["trajectory"]["frames"])
+        assert getattr(restored_widget, key) == value
 
 
 @pytest.mark.parametrize(
