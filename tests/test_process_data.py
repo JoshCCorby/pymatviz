@@ -550,6 +550,8 @@ def test_bin_df_cols_raises() -> None:
     ("data", "expected"),
     [
         ([1, 2, 3, 225], [1, 2, 3, 225]),
+        ([225.0, 1.0, 62.0], [225, 1, 62]),
+        (pd.Series([225, 1, 62], dtype="Float64"), [225, 1, 62]),
         (pd.Series([1, 225, 167]), [1, 225, 167]),
         (["Fm-3m", "P1", "Pnma"], [225, 1, 62]),  # Hermann-Mauguin symbols -> numbers
     ],

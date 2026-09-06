@@ -539,7 +539,7 @@ def normalize_spacegroups(
             - pandas Series of any of the above
 
     Returns:
-        pd.Series: Space group numbers (1-230), preserving Series index and name.
+        pd.Series: Integer space group numbers (1-230), preserving index and name.
 
     Raises:
         ValueError: If data is empty, contains missing values, invalid symbols,
@@ -569,7 +569,7 @@ def normalize_spacegroups(
                 "Space group numbers must be in [1, 230] and integral, "
                 f"got: {invalid.tolist()}"
             )
-        return result
+        return result.astype(int)
 
     # Convert Hermann-Mauguin symbols to space group numbers
     if isinstance(first_item, str):
