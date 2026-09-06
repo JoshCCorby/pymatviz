@@ -18,7 +18,7 @@ We strive for a quick turnaround on pull requests (PRs) for bug fixes and new fe
 ### Workflow
 
 1. Fork the repository, clone your fork (`git clone https://github.com/YOUR-USERNAME/pymatviz.git`), and enter it (`cd pymatviz`).
-1. Create a new branch for your changes (`git checkout -b your-feature-name`).
+1. Create a new branch for your changes (`git switch -c your-feature-name`).
 1. Follow the local setup instructions below before making changes.
 1. Make code changes.
 1. Add tests for any new functionality and fixes.
@@ -29,7 +29,7 @@ We strive for a quick turnaround on pull requests (PRs) for bug fixes and new fe
 
 ### Local setup
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and [Node.js 24](https://nodejs.org/en/download), the Node version used by the lint workflow. `pymatviz` requires Python 3.12 or newer; the commands below use Python 3.12 to match the test workflow. `uv` will download it if needed.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/). `pymatviz` requires Python 3.12 or newer; these commands use 3.12 to match CI. `uv` downloads it if needed.
 
 From the root of your cloned repository, create and activate a virtual environment:
 
@@ -46,18 +46,17 @@ Install the package in editable mode, the test extras used in CI, and the develo
 uv pip install -e '.[test,brillouin,export]' --group dev
 ```
 
-Install the site dependencies even for Python-only changes: the shared hooks invoke `pnpm` and `vp staged`. Use [Corepack](https://github.com/nodejs/corepack#how-to-install) to select the pnpm version pinned in `site/package.json`. If your Node installation does not include Corepack, install it using the linked instructions first. Setting that version as Corepack's default also lets hooks invoke it from the repository root, which has no `package.json`.
+Install [Node.js 24](https://nodejs.org/en/download) and [Corepack](https://github.com/nodejs/corepack#how-to-install), then install the site dependencies. The shared hooks require these even for Python-only changes. Run pnpm inside `site/` so Corepack selects the version pinned in `site/package.json`; the hook also uses this directory.
 
 ```sh
 corepack enable
 cd site
-corepack install --global "$(node -p 'require("./package.json").packageManager')"
 pnpm install
 cd ..
 prek install
 ```
 
-We use [prek](https://prek.j178.dev/quickstart/) to run the hooks in `.pre-commit-config.yaml`, including its built-in checks, rather than the `pre-commit` package. `prek install` installs both the `pre-commit` and `commit-msg` Git hooks. If you previously ran `pre-commit install`, use `prek install --overwrite` to replace those hooks.
+`prek install` installs the `pre-commit` and `commit-msg` Git hooks configured in `.pre-commit-config.yaml`. To replace hooks previously installed by `pre-commit`, use `prek install --force`. See the [prek documentation](https://prek.j178.dev/quickstart/) for details.
 
 ### Running checks and tests
 
@@ -69,13 +68,13 @@ prek run --all-files
 
 Hooks may modify files; review and stage any fixes before committing again. The first run downloads the hook environments and can take longer.
 
-Install Chromium for the browser-based tests, then run the Python tests from the repository root:
+Install Chromium for browser-based tests, then run the test files relevant to your change from the repository root:
 
 ```sh
 playwright install chromium
-pytest
+pytest tests/test_pkg.py
 ```
 
-On Linux, use `playwright install --with-deps chromium` if browser system dependencies are missing; this may require administrator privileges. For a quicker targeted check, pass a test file, for example `pytest tests/test_pkg.py`.
+On Linux, `playwright install --with-deps chromium` also installs browser system dependencies and may require administrator privileges. Run `pytest` without paths when you need the full suite.
 
 By contributing, you agree that your contributions will be licensed under the same [MIT License](license) that covers the project. Thanks for contributing to `pymatviz`!
