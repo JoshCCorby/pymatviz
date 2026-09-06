@@ -89,12 +89,21 @@ def test_density_scatter_uses_series_name_as_label() -> None:
 def test_density_scatter_with_hist(df_or_arrays: DfOrArrays) -> None:
     """Test density_scatter_with_hist function."""
     df, x, y = df_or_arrays
-    fig = pmv.density_scatter_with_hist(df=df, x=x, y=y)
+    fig = pmv.density_scatter_with_hist(
+        df=df, x=x, y=y, identity_line=True, best_fit_line=True, stats=True
+    )
     assert isinstance(fig, go.Figure)
     assert len(fig.data) >= 3
     assert sum(isinstance(trace, go.Bar) for trace in fig.data) == 2
     assert fig.layout.xaxis.title.text == (x if isinstance(x, str) else "Actual")
     assert fig.layout.yaxis2.title.text == (y if isinstance(y, str) else "Predicted")
+    assert len(fig.layout.shapes) == 2
+    assert len(fig.layout.annotations) == 2
+    assert all(shape.xref == "x2" and shape.yref == "y2" for shape in fig.layout.shapes)
+    assert all(
+        anno.xref == "x2 domain" and anno.yref == "y2 domain"
+        for anno in fig.layout.annotations
+    )
 
 
 @pytest.mark.parametrize("gridsize", [50, 100])
@@ -126,16 +135,119 @@ def test_density_hexbin(
     assert len(scatter_traces) > 0
 
 
+@pytest.mark.parametrize("weighted", [False, True])
+def test_density_hexbin_cell_membership(weighted: bool) -> None:
+    """Bin by hexagonal cells, keeping zero and negative weighted totals."""
+    fig = pmv.density_hexbin(
+        [0, 2, 0.49, 0.51, 0.9],
+        [0, 2, 0.49, 0.51, 0.1],
+        weights=[0, 1, 2, -2, -3] if weighted else None,
+        gridsize=2,
+        identity_line=False,
+        best_fit_line=False,
+        stats=False,
+    )
+    trace = fig.data[0]
+    bins = dict(
+        zip(zip(trace.x, trace.y, strict=True), trace.marker.color, strict=True)
+    )
+    assert bins == {
+        (0, 0): 0 if weighted else 1,
+        (2, 2): 1,
+        (0.5, 0.5): 0 if weighted else 2,
+        (1, 0): -3 if weighted else 1,
+    }
+
+
+@pytest.mark.parametrize("constant", [False, True])
+def test_density_hexbin_weight_alignment(constant: bool) -> None:
+    """Preserve weights after filtering DataFrame rows and on constant coordinates."""
+    df = pd.DataFrame({"x": [1, np.nan, 1 if constant else 2], "y": [1, 2, 1]})
+    fig = pmv.density_hexbin(
+        "x",
+        "y",
+        df=df,
+        weights=[2, 100, 3],
+        gridsize=2,
+        identity_line=False,
+        best_fit_line=False,
+        stats=False,
+    )
+    assert sum(fig.data[0].marker.color) == 5
+    assert np.isfinite(fig.data[0].x).all()
+    assert np.isfinite(fig.data[0].y).all()
+    if constant:
+        assert tuple(fig.data[0].marker.color) == (5,)
+    with pytest.raises(ValueError, match="one weight per DataFrame row"):
+        pmv.density_hexbin("x", "y", df=df, weights=[1])
+
+
+@pytest.mark.parametrize("gridsize", [1, 3, 15])
+def test_density_hexbin_nearest_centers(gridsize: int) -> None:
+    """Match exhaustive nearest-center assignment across the hexagonal grid."""
+    points = np.vstack(([0, 0], [1, 1], np.random.default_rng(seed=0).random((100, 2))))
+    grid_x, grid_y = np.meshgrid(
+        np.arange(-1, gridsize + 2), np.arange(-1, gridsize + 2)
+    )
+    lattice = np.column_stack((grid_x.ravel(), grid_y.ravel()))
+    candidates = np.vstack((lattice, lattice + 0.5)) / gridsize
+    distances = ((points[:, None] - candidates) ** 2 * [1, 3]).sum(axis=2)
+    nearest = distances.argmin(axis=1)
+    occupied, counts = np.unique(nearest, return_counts=True)
+    expected = candidates[occupied]
+    order = np.lexsort((expected[:, 1], expected[:, 0]))
+    fig = pmv.density_hexbin(
+        *points.T,
+        gridsize=gridsize,
+        identity_line=False,
+        best_fit_line=False,
+        stats=False,
+    )
+    actual = np.column_stack((fig.data[0].x, fig.data[0].y))
+    # Coordinates in [0, 1] require only grid scaling; allow eight f64 epsilons.
+    np.testing.assert_allclose(
+        actual, expected[order], rtol=0, atol=8 * np.finfo(float).eps
+    )
+    np.testing.assert_array_equal(fig.data[0].marker.color, counts[order])
+
+
+@pytest.mark.parametrize(
+    ("coords", "weights", "gridsize", "message"),
+    [
+        ([], None, 2, "non-empty 1D"),
+        ([1, np.inf], None, 2, "must be finite"),
+        ([1, 2], [1], 2, "finite weights"),
+        ([1, 2], [1, np.nan], 2, "finite weights"),
+        ([1, 2], None, 0, "must be positive"),
+    ],
+)
+def test_density_hexbin_invalid_inputs(
+    coords: list[float], weights: list[float] | None, gridsize: int, message: str
+) -> None:
+    """Reject inputs that cannot define a finite hexagonal grid."""
+    with pytest.raises(ValueError, match=message):
+        pmv.density_hexbin(coords, coords, weights=weights, gridsize=gridsize)
+
+
 def test_density_hexbin_with_hist(df_or_arrays: DfOrArrays) -> None:
     """Test density_hexbin_with_hist function."""
     df, x, y = df_or_arrays
-    fig = pmv.density_hexbin_with_hist(df=df, x=x, y=y)
+    fig = pmv.density_hexbin_with_hist(
+        df=df, x=x, y=y, identity_line=True, best_fit_line=True, stats=True
+    )
     assert isinstance(fig, go.Figure)
     assert len(fig.data) >= 3
     assert sum(isinstance(trace, go.Bar) for trace in fig.data) == 2
     assert any(
         isinstance(trace, go.Scatter) and trace.marker.symbol == "hexagon"
         for trace in fig.data
+    )
+    assert len(fig.layout.shapes) == 2
+    assert len(fig.layout.annotations) == 2
+    assert all(shape.xref == "x2" and shape.yref == "y2" for shape in fig.layout.shapes)
+    assert all(
+        anno.xref == "x2 domain" and anno.yref == "y2 domain"
+        for anno in fig.layout.annotations
     )
 
 

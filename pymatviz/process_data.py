@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Hashable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 import pandas as pd
 import scipy.stats
 from pandas.api.types import is_numeric_dtype, is_string_dtype
-from pymatgen.core import Composition, IStructure, SiteCollection, Structure
+from pymatgen.core import Composition, IStructure, Structure
 from pymatgen.io.phonopy import get_pmg_structure
 
 from pymatviz.enums import ElemCountMode, Key
@@ -18,8 +18,6 @@ from pymatviz.utils import df_ptable
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from ase.atoms import Atoms
     from numpy.typing import ArrayLike
     from phonopy.structure.atoms import PhonopyAtoms
@@ -27,7 +25,7 @@ if TYPE_CHECKING:
     from pymatgen.phonon.bandstructure import PhononBandStructureSymmLine
     from typing_extensions import TypeIs
 
-    from pymatviz.typing import AnyStructure, ElemValues, FormulaGroupBy, T
+    from pymatviz.typing import AnyStructure, ElemValues, FormulaGroupBy
 
 
 def count_elements(
@@ -390,61 +388,6 @@ def normalize_periodic_structures(
             )
         struct_dict[key] = struct
     return struct_dict
-
-
-def normalize_to_dict(
-    inputs: T | Sequence[T] | dict[str, T],
-    cls: type[T] = SiteCollection,  # ty: ignore[invalid-parameter-default]
-    key_gen: Callable[[T], str] = lambda obj: getattr(
-        obj, "formula", type(obj).__name__
-    ),
-) -> dict[str, T]:
-    """Normalize any kind of object or dict/list/tuple of them into to a dictionary.
-
-    Args:
-        inputs (T | Sequence[T] | dict[str, T]): A single object, a sequence of objects,
-            or a dictionary of objects.
-        cls (type[T], optional): The class of the objects to normalize. Defaults to
-            pymatgen.core.SiteCollection.
-        key_gen (Callable[[T], str], optional): A function that generates a key for
-            each object. Defaults to using the object's formula attribute, if present
-            (as is the case for pymatgen.core.SiteCollection).
-
-    Returns:
-        dict[str, T]: Map of objects with keys as object formulas or given keys.
-
-    Raises:
-        TypeError: If the input format is invalid.
-    """
-    if isinstance(inputs, cls):
-        return {key_gen(inputs): inputs}
-
-    if isinstance(inputs, Sequence) and not isinstance(inputs, (str, bytes)) and inputs:
-        out_dict: dict[str, T] = {}
-        for obj in inputs:
-            if not isinstance(obj, cls):
-                raise TypeError(
-                    f"Invalid item in inputs, expected {cls.__name__}, "
-                    f"got {type(obj).__name__}"
-                )
-            base_key = key_gen(obj)
-            candidate = base_key
-            idx = 1
-            while candidate in out_dict:
-                candidate = f"{base_key} {idx}"
-                idx += 1
-            out_dict[candidate] = obj
-        return out_dict
-
-    if isinstance(inputs, dict):
-        return cast("dict[str, T]", inputs)
-    if isinstance(inputs, pd.Series):
-        return inputs.to_dict()
-
-    cls_name = cls.__name__
-    raise TypeError(
-        f"Invalid inputs, expected {cls_name} or dict/list/tuple of {cls_name}"
-    )
 
 
 def df_to_arrays(

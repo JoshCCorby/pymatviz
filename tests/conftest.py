@@ -163,7 +163,7 @@ def fe3co4_disordered() -> IStructure:
     """
     from pymatviz.structure import fe3co4_disordered
 
-    return fe3co4_disordered
+    return copy.deepcopy(fe3co4_disordered)
 
 
 @pytest.fixture

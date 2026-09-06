@@ -51,7 +51,7 @@ def test_widget_creates_view_model(multi_frame_trajectory: dict[str, Any]) -> No
         trait = class_traits[trait_name]
         assert trait.metadata.get("sync") is True
 
-    assert widget.trajectory == multi_frame_trajectory
+    assert widget.trajectory == json.loads(json.dumps(multi_frame_trajectory))
     assert widget.current_step_idx == 0
     assert widget.layout == "auto"
     assert widget.display_mode == "structure+scatter"
@@ -61,8 +61,11 @@ def test_widget_creates_view_model(multi_frame_trajectory: dict[str, Any]) -> No
     json.dumps(widget.trajectory)
 
 
+@pytest.mark.parametrize("input_format", ["dict", "list", "tuple", "structure"])
 def test_widget_trajectory_updates(
-    multi_frame_trajectory: dict[str, Any], fe3co4_disordered: Structure
+    multi_frame_trajectory: dict[str, Any],
+    fe3co4_disordered: Structure,
+    input_format: str,
 ) -> None:
     """Widget must handle trajectory updates correctly."""
     widget = TrajectoryWidget()
@@ -71,17 +74,46 @@ def test_widget_trajectory_updates(
 
     # Test trajectory assignment
     widget.trajectory = multi_frame_trajectory
-    assert widget.trajectory == multi_frame_trajectory
+    assert widget.trajectory == json.loads(json.dumps(multi_frame_trajectory))
 
     # Test step navigation
     widget.current_step_idx = 2
     assert widget.current_step_idx == 2
 
     # Test trajectory update (step doesn't reset automatically)
-    new_trajectory = {"frames": [fe3co4_disordered, fe3co4_disordered]}
-    widget.trajectory = new_trajectory
-    assert widget.trajectory == new_trajectory
+    updated_structure = fe3co4_disordered.copy(properties={"energy": -1.5})
+    new_trajectory = {
+        "frames": [updated_structure, updated_structure],
+        "metadata": {"temperature": np.int64(300)},
+    }
+    widget.trajectory = {
+        "dict": new_trajectory,
+        "list": new_trajectory["frames"],
+        "tuple": tuple(new_trajectory["frames"]),
+        "structure": updated_structure,
+    }[input_format]
+    expected_structure = json.loads(json.dumps(updated_structure.as_dict()))
+    assert widget.trajectory == {
+        "frames": [
+            {
+                "structure": expected_structure,
+                "step": step_idx,
+                "metadata": {"energy": -1.5},
+            }
+            for step_idx in range(1 if input_format == "structure" else 2)
+        ],
+        "metadata": {"temperature": 300} if input_format == "dict" else {},
+    }
+    json.dumps(widget.get_state()["trajectory"])
+    assert new_trajectory["frames"][0] is updated_structure
+    assert isinstance(new_trajectory["metadata"]["temperature"], np.int64)
     assert widget.current_step_idx == 2  # Remains unchanged
+    widget.trajectory = None
+    assert widget.trajectory is None
+    assert widget.current_step_idx == 2
+    with pytest.raises(TypeError, match="Unsupported trajectory type"):
+        widget.trajectory = "invalid trajectory"
+    assert widget.trajectory is None
 
 
 def test_widget_complete_lifecycle(
@@ -98,7 +130,7 @@ def test_widget_complete_lifecycle(
     )
 
     # Test initial state
-    assert widget.trajectory == multi_frame_trajectory
+    assert widget.trajectory == json.loads(json.dumps(multi_frame_trajectory))
     assert widget.current_step_idx == 0
     assert widget.style == "width: 800px; height: 600px"
     assert widget.show_controls is False
@@ -112,7 +144,10 @@ def test_widget_complete_lifecycle(
     # Test trajectory update
     new_trajectory = {"frames": [fe3co4_disordered] * 10}
     widget.trajectory = new_trajectory
-    assert widget.trajectory == new_trajectory
+    expected_structure = json.loads(json.dumps(fe3co4_disordered.as_dict()))
+    assert [frame["structure"] for frame in widget.trajectory["frames"]] == [
+        expected_structure
+    ] * 10
 
     # Test state persistence
     state = {
@@ -129,12 +164,7 @@ def test_widget_complete_lifecycle(
 
     # Verify state preservation
     for key, value in state.items():
-        if key != "trajectory":
-            assert getattr(restored_widget, key) == value
-
-    restored_trajectory = restored_widget.trajectory
-    assert restored_trajectory is not None
-    assert len(restored_trajectory["frames"]) == len(state["trajectory"]["frames"])
+        assert getattr(restored_widget, key) == value
 
 
 @pytest.mark.parametrize(
@@ -284,11 +314,7 @@ def test_trajectory_widget_completes_only_non_derivable_fields(
     expected_species: list[dict[str, Any]] | None,
     coord_key: str,
 ) -> None:
-    """Dict frames get step, occu, label, properties and a lattice matrix; fields
-    matterviz's trajectory_from_json recomputes (a/b/c/angles/volume/pbc, the
-    missing abc<->xyz) are not emitted, keeping the JSON payload lean. Explicit steps
-    (int, float, numpy) and occupancies are kept, missing steps default to the index.
-    """
+    """Dict frames gain required fields and serialize NumPy values as JSON numbers."""
     coords = [0.25, 0.5, 0.75]
     structure = {
         "lattice": lattice_input,
@@ -296,8 +322,15 @@ def test_trajectory_widget_completes_only_non_derivable_fields(
     }
     steps = ({"step": 500}, {}, {"step": 2.5}, {"step": np.int64(3000)})
     frames = [{"structure": structure, **step} for step in steps]
-    widget = TrajectoryWidget(trajectory={"frames": frames})
+    frames[0]["metadata"] = {"forces": np.zeros((1, 3))}
+    widget = TrajectoryWidget(
+        trajectory={"frames": frames, "metadata": {"temperature": np.int64(300)}}
+    )
     assert [f["step"] for f in widget.trajectory["frames"]] == [500, 1, 2.5, 3000]
+    exported = json.loads(json.dumps(widget.to_dict()))["trajectory"]
+    assert exported["metadata"]["temperature"] == 300
+    assert exported["frames"][3]["step"] == 3000
+    assert exported["frames"][0]["metadata"]["forces"] == [[0.0, 0.0, 0.0]]
     frame = widget.trajectory["frames"][0]
     lattice = frame["structure"]["lattice"]
     assert set(lattice) == {"matrix", *lattice_input}  # no a/b/c/.../volume/pbc added

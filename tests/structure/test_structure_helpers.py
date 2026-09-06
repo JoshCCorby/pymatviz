@@ -943,7 +943,10 @@ def test_draw_bonds_advanced(
 
 def test_get_struct_prop(fe3co4_disordered: Structure) -> None:
     """Test the property precedence helper function."""
+    from pymatviz.structure import fe3co4_disordered as reference_structure
+
     struct = fe3co4_disordered
+    reference_properties = reference_structure.properties.copy()
 
     # Test 1: Structure property takes precedence over function parameter
     struct.properties["test_prop"] = "struct_value"
@@ -979,6 +982,7 @@ def test_get_struct_prop(fe3co4_disordered: Structure) -> None:
         struct, "key", ElemColorScheme.jmol, 0.5, None, 30, 1.0
     )
     assert cell_boundary_tol == 0.0
+    assert reference_structure.properties == reference_properties
 
 
 def test_draw_disordered_site_legend_functionality() -> None:

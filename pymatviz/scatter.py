@@ -449,8 +449,8 @@ def density_hexbin(
         df (pd.DataFrame, optional): DataFrame with x and y columns. Defaults to None.
         weights (array, optional): If given, these values are accumulated in the bins.
             Otherwise, every point has value 1. Must be of the same length as x and y.
-        gridsize (int, optional): Number of hexagons in the x and y directions.
-            Defaults to 75.
+        gridsize (int, optional): Grid intervals along each axis, with a second lattice
+            offset by half an interval. Defaults to 75.
         identity_line (bool | dict[str, Any], optional): Whether to add a parity line
             (y = x). Defaults to True. Pass a dict to customize line properties.
         best_fit_line (bool | dict[str, Any], optional): Whether to add a best-fit line.
@@ -473,38 +473,49 @@ def density_hexbin(
     xlabel = xlabel or auto_xlabel
     ylabel = ylabel or auto_ylabel
 
-    # Use numpy's histogram2d for initial binning, then convert to hex coordinates
     weights_arr = None if weights is None else np.asarray(weights)
-    hist, x_edges, y_edges = np.histogram2d(xs, ys, bins=gridsize, weights=weights_arr)
+    if weights_arr is not None and df is not None:
+        if weights_arr.shape != (len(df),):
+            raise ValueError(
+                f"Expected one weight per DataFrame row, got {weights_arr.shape=}"
+            )
+        weights_arr = weights_arr[df[[x, y]].notna().all(axis=1)]
+    if xs.ndim != 1 or ys.shape != xs.shape or not len(xs):
+        raise ValueError(
+            f"Expected non-empty 1D coordinates, got {xs.shape=}, {ys.shape=}"
+        )
+    if not np.isfinite(xs).all() or not np.isfinite(ys).all():
+        raise ValueError("Hexbin coordinates must be finite")
+    if weights_arr is not None and (
+        weights_arr.shape != xs.shape or not np.isfinite(weights_arr).all()
+    ):
+        raise ValueError(
+            f"Expected finite weights with shape {xs.shape}, got {weights_arr.shape=}"
+        )
 
-    # Create hexagonal grid from rectangular bins
-    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+    # Nearest centers on two interleaved lattices form hexagonal Voronoi cells.
+    bounds = np.array(
+        [np.histogram_bin_edges(values, bins=gridsize)[[0, -1]] for values in (xs, ys)]
+    )
+    origin = bounds[:, 0]
+    spacing = (bounds[:, 1] - origin) / gridsize
+    points = (np.column_stack((xs, ys)) - origin) / spacing
+    centers = np.rint(points)
+    offset_centers = np.floor(points) + 0.5
+    distances = ((points - centers) ** 2 * [1, 3]).sum(axis=1)
+    offset_distances = ((points - offset_centers) ** 2 * [1, 3]).sum(axis=1)
+    centers = np.where(
+        (distances <= offset_distances)[:, None], centers, offset_centers
+    )
+    centers, bin_indices = np.unique(centers, axis=0, return_inverse=True)
+    x_plot, y_plot = (origin + centers * spacing).T
+    z_plot = np.bincount(bin_indices, weights=weights_arr)
 
-    # Convert to hexagonal tessellation pattern
-    hex_x, hex_y, hex_counts = [], [], []
-    hex_width = x_edges[1] - x_edges[0]
-
-    for ii, x_center in enumerate(x_centers):
-        for jj, y_center in enumerate(y_centers):
-            count = hist[ii, jj]
-            if count > 0:
-                # Apply hexagonal offset for alternating rows
-                x_offset = hex_width / 2 if jj % 2 == 1 else 0
-                hex_x.append(x_center + x_offset)
-                hex_y.append(y_center)
-                hex_counts.append(count)
-
-    x_plot, y_plot, z_plot = np.array(hex_x), np.array(hex_y), np.array(hex_counts)
-
-    # Create the scatter plot with hexagon markers
     fig = go.Figure()
 
-    # Calculate marker size to prevent overlap
-    # Make markers much smaller than the hex boundaries to avoid visual overlap
-    # Scale inversely with gridsize - more hexagons = smaller markers
-    base_size = 400 / gridsize  # Doubled the base scaling factor
-    marker_size = min(12, max(4, base_size))  # Doubled size range: 4-12
+    # Shrink markers as the grid becomes denser.
+    base_size = 400 / gridsize
+    marker_size = min(12, max(4, base_size))
 
     scatter_defaults = dict(
         mode="markers",
@@ -584,6 +595,24 @@ def _with_marginal_hist(
     # Copy colorbar settings
     if hasattr(fig.layout, "coloraxis"):
         subplot_fig.layout.coloraxis = fig.layout.coloraxis
+
+    # Keep parity lines and statistics anchored to the main panel.
+    for items, add_item in (
+        (fig.layout.shapes, subplot_fig.add_shape),
+        (fig.layout.annotations, subplot_fig.add_annotation),
+    ):
+        for item in items:
+            spec = item.to_plotly_json()
+            for axis in ("x", "y"):
+                ref = spec.get(f"{axis}ref", axis)
+                spec[f"{axis}ref"] = {
+                    axis: f"{axis}2",
+                    f"{axis} domain": f"{axis}2 domain",
+                    "paper": f"{axis}2 domain",
+                }.get(ref, ref)
+                if spec.get(f"a{axis}ref") == axis:
+                    spec[f"a{axis}ref"] = f"{axis}2"
+            add_item(**spec)
 
     return subplot_fig
 

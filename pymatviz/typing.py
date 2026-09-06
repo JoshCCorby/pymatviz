@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Literal, TypeVar, get_args
+from typing import TYPE_CHECKING, Literal, get_args
 
 import pandas as pd
 
@@ -47,8 +47,6 @@ type ElemValues = (
     | pd.Series
     | Sequence["str | Composition"]
 )
-
-T = TypeVar("T")  # generic type for input validation
 
 SetMode = Literal["union", "intersection", "strict"]
 SET_MODE = SET_UNION, SET_INTERSECTION, SET_STRICT = get_args(SetMode)

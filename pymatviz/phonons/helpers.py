@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Literal
 
 from pymatgen.electronic_structure.bandstructure import (
@@ -48,23 +48,19 @@ class PhononDBDoc:
     mp_id: str | None = None  # material ID
     formula: str | None = None  # chemical formula
 
-    def __new__(cls, **kwargs: Any) -> Self:
-        """Ignore unexpected and initialize dataclass with known kwargs."""
-        try:
-            cls_init = cls.__initializer  # ty: ignore[unresolved-attribute]
-        except AttributeError:
-            # store original init on the class in a different place
-            cls.__initializer = cls_init = cls.__init__  # ty: ignore[unresolved-attribute]
-            # replace init with noop to avoid raising on unexpected kwargs
-            cls.__init__ = lambda *args, **kwargs: None  # noqa: ARG005  # ty: ignore[invalid-assignment]
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        """Decode document fields, ignoring database metadata outside this schema."""
+        from monty.json import MontyDecoder
 
-        ret = object.__new__(cls)
-        known_kwargs = {
-            key: val for key, val in kwargs.items() if key in cls.__annotations__
-        }
-        cls_init(ret, **known_kwargs)
-
-        return ret
+        decoder = MontyDecoder()
+        return cls(
+            **{
+                field.name: decoder.process_decoded(data[field.name])
+                for field in fields(cls)
+                if field.init and field.name in data
+            }
+        )
 
 
 def pretty_sym_point(symbol: str) -> str:

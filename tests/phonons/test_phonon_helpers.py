@@ -1,22 +1,58 @@
 from __future__ import annotations
 
+import json
+from dataclasses import fields, replace
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import plotly.graph_objects as go
 import pytest
+from monty.io import zopen
+from monty.json import MontyDecoder
+from pymatgen.core import Structure
 from pymatgen.phonon.bandstructure import PhononBandStructureSymmLine as PhononBands
+from pymatgen.phonon.dos import PhononDos
 
 import pymatviz as pmv
-from pymatviz.phonons.helpers import pretty_sym_point
+from pymatviz.phonons.helpers import PhononDBDoc, pretty_sym_point
+from pymatviz.utils.testing import TEST_FILES
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    import numpy as np
-
     from pymatviz.typing import SetMode
     from tests.conftest import BandsDoses
+
+
+@pytest.mark.parametrize("via_monty", [False, True])
+def test_phonon_db_doc_deserialization(via_monty: bool) -> None:
+    """Decode database fields without changing dataclass construction or replacement."""
+    with zopen(f"{TEST_FILES}/phonons/mp-2758-Sr4Se4-pbe.json.xz", mode="rt") as source:
+        raw = json.load(source)
+    original_init = PhononDBDoc.__init__
+    doc = (
+        MontyDecoder().process_decoded(raw) if via_monty else PhononDBDoc.from_dict(raw)
+    )
+    assert isinstance(doc, PhononDBDoc)
+    assert isinstance(doc.structure, Structure)
+    assert isinstance(doc.phonon_bandstructure, PhononBands)
+    assert isinstance(doc.phonon_dos, PhononDos)
+    assert doc.structure.as_dict() == Structure.from_dict(raw["structure"]).as_dict()
+    np.testing.assert_array_equal(
+        doc.phonon_dos.densities, raw["phonon_dos"]["densities"]
+    )
+    assert doc.free_energies == raw["free_energies"]
+    assert not hasattr(doc, "builder_meta")
+    assert replace(doc, formula="SrSe").formula == "SrSe"
+    assert doc.formula is None
+    assert PhononDBDoc.__init__ is original_init
+    kwargs = {field.name: getattr(doc, field.name) for field in fields(doc)}
+    assert PhononDBDoc(**kwargs).structure is doc.structure
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        PhononDBDoc(**kwargs, unknown=True)  # ty: ignore[unknown-argument]
+    with pytest.raises(TypeError, match="required positional arguments"):
+        PhononDBDoc.from_dict({})
 
 
 @pytest.mark.parametrize(
@@ -26,7 +62,7 @@ if TYPE_CHECKING:
             ["GAMMA-X", "X-U"],
             "union",
             dict(width=2),
-            tuple("ΓLXΓWXU"),
+            tuple("ΓXU"),
         ),
         # test empty tuple branches with intersection mode
         ((), "intersection", None, tuple("ΓLXΓWXU")),
@@ -37,7 +73,7 @@ if TYPE_CHECKING:
                 "acoustic": dict(width=2.5, dash="solid", name="Acoustic modes"),
                 "optical": dict(width=1, dash="dash", name="Optical modes"),
             },
-            tuple("ΓLXΓWXU"),
+            tuple("ΓX"),
         ),
         (  # test callable line_kwargs
             (),
@@ -75,6 +111,11 @@ def test_phonon_bands(
         line_kwargs=line_kwargs,
     )
     assert isinstance(fig, go.Figure)
+    if branches:
+        assert (
+            len(fig.data)
+            == len(branches) * phonon_bands_doses_mp_2758["bands"]["DFT"].nb_bands
+        )
     assert fig.layout.xaxis.title.text == "Wave Vector"
     assert fig.layout.yaxis.title.text == "Frequency (THz)"
     assert fig.layout.font.size == 16
@@ -175,6 +216,11 @@ def test_phonon_bands_raises(
     stdout, stderr = capsys.readouterr()
     assert stdout == ""
     assert "Warning missing_branches={'foo-bar'}, available branches:" in stderr
+
+    with pytest.raises(ValueError, match="No matching branches"):
+        pmv.phonon_bands(
+            phonon_bands_doses_mp_2758["bands"]["DFT"], branches=["missing"]
+        )
 
     with pytest.raises(ValueError, match="Invalid path_mode='invalid'"):
         pmv.phonon_bands(

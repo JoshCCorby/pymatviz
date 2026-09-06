@@ -55,7 +55,7 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
 
     # display options shared with StructureWidget live in StructureVizTraits
 
-    trajectory = tl.Dict(allow_none=True).tag(sync=True)
+    trajectory = tl.Any(default_value=None, allow_none=True).tag(sync=True)
     current_step_idx = tl.Int(0).tag(sync=True)
 
     # Layout
@@ -98,10 +98,16 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
                 ]
             **kwargs: Additional widget properties
         """
-        if trajectory is not None:  # Convert trajectory objects if needed
-            trajectory = self._normalize_trajectory(trajectory)
-
         super().__init__(widget_type="trajectory", trajectory=trajectory, **kwargs)
+
+    @tl.validate("trajectory")
+    def _validate_trajectory(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize constructor data and later assignments before syncing to JS."""
+        from pymatviz.widgets._normalize import normalize_plot_json
+
+        return normalize_plot_json(
+            self._normalize_trajectory(proposal["value"]), "trajectory"
+        )
 
     def _to_structure_dict(self, structure_input: Any) -> tuple[dict[str, Any], Any]:
         """Convert structure-like input to dict and metadata source object."""
@@ -202,8 +208,6 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
                 return normalized_trajectory
             return self._complete_trajectory_dict(trajectory)
 
-        from pymatviz.widgets._normalize import normalize_plot_json
-
         if isinstance(trajectory, (list, tuple)):
             frames: list[dict[str, Any]] = []
             for step_idx, item in enumerate(trajectory):
@@ -219,11 +223,7 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
 
                 metadata = properties or self._extract_object_metadata(metadata_source)
                 if metadata:
-                    # convert numpy arrays/scalars to JSON-safe primitives so the
-                    # frontend receives numeric arrays, not stringified reprs
-                    frame["metadata"] = normalize_plot_json(
-                        metadata, "trajectory.frame.metadata"
-                    )
+                    frame["metadata"] = metadata
 
                 frames.append(frame)
 
@@ -236,9 +236,7 @@ class TrajectoryWidget(StructureVizTraits, MatterVizWidget):
             frame: dict[str, Any] = {"structure": structure_dict, "step": 0}
             metadata = self._extract_object_metadata(metadata_source)
             if metadata:
-                frame["metadata"] = normalize_plot_json(
-                    metadata, "trajectory.frame.metadata"
-                )
+                frame["metadata"] = metadata
             return {"frames": [frame], "metadata": {}}
 
         raise TypeError(
