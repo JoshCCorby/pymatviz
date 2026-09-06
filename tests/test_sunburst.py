@@ -50,6 +50,13 @@ def test_spacegroup_sunburst_invalid_show_counts() -> None:
         spacegroup_sunburst([1], show_counts="invalid")  # ty: ignore[invalid-argument-type]
 
 
+@pytest.mark.parametrize("invalid", [None, float("nan"), pd.NA, 0, 231, 2.5, "invalid"])
+def test_spacegroup_sunburst_invalid_data(invalid: Any) -> None:
+    """Reject missing and invalid groups instead of losing or mislabeling slices."""
+    with pytest.raises(ValueError, match=r"missing values|Invalid space group"):
+        spacegroup_sunburst([1, invalid])
+
+
 def test_spacegroup_sunburst_single_item() -> None:
     """Test with single-item input."""
     fig = spacegroup_sunburst([1], show_counts="value")

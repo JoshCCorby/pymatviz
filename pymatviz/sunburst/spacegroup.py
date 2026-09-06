@@ -81,19 +81,15 @@ def spacegroup_sunburst(
         series = pd.Series(spg_nums)
     else:
         series = pd.Series(values)
+    if series.isna().any():
+        raise ValueError("Space group data must not contain missing values")
 
     df_spg_counts = pd.DataFrame(series.value_counts().reset_index())
     df_spg_counts.columns = [Key.spg_num, "count"]
 
-    try:  # assume column contains integers as space group numbers
-        df_spg_counts[Key.crystal_system] = df_spg_counts[Key.spg_num].map(
-            pmv.utils.spg_to_crystal_sys
-        )
-
-    except (ValueError, TypeError):  # assume column is strings of space group symbols
-        df_spg_counts[Key.crystal_system] = df_spg_counts[Key.spg_num].map(
-            pmv.utils.spg_num_to_from_symbol
-        )
+    df_spg_counts[Key.crystal_system] = df_spg_counts[Key.spg_num].map(
+        pmv.utils.spg_to_crystal_sys
+    )
 
     # Limit the number of space groups per crystal system if requested
     df_spg_counts = _limit_slices_per_group(
