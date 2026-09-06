@@ -46,7 +46,7 @@ Install the package in editable mode, the test extras used in CI, and the develo
 uv pip install -e '.[test,brillouin,export]' --group dev
 ```
 
-Install [Node.js 24](https://nodejs.org/en/download) and [Corepack](https://github.com/nodejs/corepack#how-to-install), then install the site dependencies. The shared hooks require these even for Python-only changes. Run pnpm inside `site/` so Corepack selects the version pinned in `site/package.json`; the hook also uses this directory.
+Install [Node.js 24](https://nodejs.org/en/download) and [Corepack](https://github.com/nodejs/corepack#how-to-install), then install the site dependencies. The `vp-staged` hook in [`.pre-commit-config.yaml`](.pre-commit-config.yaml) runs `cd site && pnpm exec vp staged` even for Python-only changes. Run pnpm inside `site/` so Corepack selects the version pinned in `site/package.json`.
 
 ```sh
 corepack enable
@@ -72,7 +72,7 @@ Install Chromium for browser-based tests, then run the test files relevant to yo
 
 ```sh
 playwright install chromium
-pytest tests/test_pkg.py
+pytest tests/test_pkg.py # example; choose paths relevant to your change
 ```
 
 On Linux, `playwright install --with-deps chromium` also installs browser system dependencies and may require administrator privileges. Run `pytest` without paths when you need the full suite.
