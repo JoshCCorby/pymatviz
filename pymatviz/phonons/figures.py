@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from collections import defaultdict
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -34,7 +33,7 @@ from pymatviz.utils.plotting import PLOTLY_LINE_STYLES
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Hashable, Sequence
+    from collections.abc import Callable, Sequence
     from typing import Any
 
     from phonopy.phonon.band_structure import BandStructure as PhonopyBandStructure
@@ -86,7 +85,7 @@ def phonon_bands(
             with different q-point paths. Defaults to "strict":
             - "union": Plot all path segments from all band structures
             - "intersection": Only plot segments common to all band structures
-            - "strict": Raise error if paths don't match exactly (default)
+            - "strict": Require matching branch order and repetitions (default)
         shaded_ys (dict[tuple[float | str, float | str], dict]): Keys are y-ranges
             (min, max) tuple and values are kwargs for shaded regions created by
             fig.add_hrect(). Defaults to single entry (0, "y_min"):
@@ -112,78 +111,44 @@ def phonon_bands(
     if isinstance(branches, str):
         branches = [branches]
 
-    # First, collect all unique path segments and their endpoints across all structures
-    all_segments: dict[
-        tuple[str | None, str | None], list[tuple[Hashable, PhononBands]]
-    ] = defaultdict(list)
+    # Strict keys include branch position to preserve order and repeated segments.
+    segment_lengths: dict[tuple[int, str | None, str | None], float] = {}
+    segment_sets: list[set[tuple[int, str | None, str | None]]] = []
+    for band_struct in bs_dict.values():
+        these_segments = set()
+        for branch_idx, branch in enumerate(band_struct.branches):
+            start_idx, end_idx = branch["start_index"], branch["end_index"]
+            segment = (
+                branch_idx if path_mode == SET_STRICT else 0,
+                band_struct.qpoints[start_idx].label,
+                band_struct.qpoints[end_idx].label,
+            )
+            # Use the first structure's length to align shared segments.
+            segment_lengths.setdefault(
+                segment, band_struct.distance[end_idx] - band_struct.distance[start_idx]
+            )
+            these_segments.add(segment)
+        segment_sets.append(these_segments)
 
-    for label, band_struct in bs_dict.items():
-        for branch in band_struct.branches:
-            start_idx = branch["start_index"]
-            end_idx = branch["end_index"]
-
-            # Get start and end q-point labels for this branch
-            start_label = band_struct.qpoints[start_idx].label
-            end_label = band_struct.qpoints[end_idx].label
-
-            segment_key = (start_label, end_label)
-            all_segments[segment_key] += [(label, band_struct)]
-
-    # Now we have all_segments, determine which segments to plot based on path_mode
     if path_mode == SET_STRICT:
-        # Check if all band structures have exactly the same segments
-        first_bs = next(iter(bs_dict.values()))
-        first_segments = {
-            (start, end)
-            for branch in first_bs.branches
-            for start, end in [
-                (
-                    first_bs.qpoints[branch["start_index"]].label,
-                    first_bs.qpoints[branch["end_index"]].label,
-                )
-            ]
-        }
-        for band_struct in bs_dict.values():
-            these_segments = {
-                (start, end)
-                for branch in band_struct.branches
-                for start, end in [
-                    (
-                        band_struct.qpoints[branch["start_index"]].label,
-                        band_struct.qpoints[branch["end_index"]].label,
-                    )
-                ]
-            }
-            if these_segments != first_segments:
-                raise ValueError(
-                    "Band structures have different q-point paths. Use path_mode="
-                    f"{SET_UNION} or {SET_INTERSECTION} to plot band structures with "
-                    "different paths."
-                )
-        segments_to_plot = first_segments
+        segments_to_plot = segment_sets[0]
+        if any(segments != segments_to_plot for segments in segment_sets[1:]):
+            raise ValueError(
+                "Band structures have different q-point paths. Use path_mode="
+                f"{SET_UNION} or {SET_INTERSECTION} to plot band structures with "
+                "different paths."
+            )
+    elif path_mode == SET_INTERSECTION:
+        segments_to_plot = set.intersection(*segment_sets)
+        if not segments_to_plot:
+            raise ValueError(
+                f"{path_mode=} but no common path segments found between band "
+                "structures"
+            )
+    elif path_mode == SET_UNION:
+        segments_to_plot = set(segment_lengths)
     else:
-        # Count how many band structures have each segment
-        segment_counts = {
-            segment: len(structs) for segment, structs in all_segments.items()
-        }
-        n_structures = len(bs_dict)
-
-        if path_mode == SET_INTERSECTION:
-            # Only keep segments present in all band structures
-            segments_to_plot = {
-                segment
-                for segment, count in segment_counts.items()
-                if count == n_structures
-            }
-            if len(segments_to_plot) == 0:
-                raise ValueError(
-                    f"{path_mode=} but no common path segments found between band "
-                    "structures"
-                )
-        elif path_mode == SET_UNION:
-            segments_to_plot = set(all_segments)
-        else:
-            raise ValueError(f"Invalid {path_mode=}, must be one of {SET_MODE}")
+        raise ValueError(f"Invalid {path_mode=}, must be one of {SET_MODE}")
 
     # find common branches by normalized branch names
     if branches:
@@ -208,54 +173,46 @@ def phonon_bands(
             )
         segments_to_plot &= {
             (
+                branch_idx if path_mode == SET_STRICT else 0,
                 band_struct.qpoints[branch["start_index"]].label,
                 band_struct.qpoints[branch["end_index"]].label,
             )
             for band_struct in bs_dict.values()
-            for branch in band_struct.branches
+            for branch_idx, branch in enumerate(band_struct.branches)
             if branch["name"] in common_branches
         }
         if not segments_to_plot:
             raise ValueError(f"No matching branches found for {branches=}")
 
-    # Create a mapping of q-point pairs to x-axis positions
-    x_positions: dict[tuple[str | None, str | None], tuple[float, float]] = {}
+    x_positions: dict[tuple[int, str | None, str | None], tuple[float, float]] = {}
     current_x = 0.0
 
-    for segment in sorted(segments_to_plot):  # Sort to ensure consistent ordering
-        if segment not in x_positions:
-            # Find the length of this segment in the first band structure that has it
-            band_struct = all_segments[segment][0][1]
-            segment_len = 0
-            for branch in band_struct.branches:
-                start_idx, end_idx = branch["start_index"], branch["end_index"]
-                if (
-                    band_struct.qpoints[start_idx].label == segment[0]
-                    and band_struct.qpoints[end_idx].label == segment[1]
-                ):
-                    segment_len = (
-                        band_struct.distance[end_idx] - band_struct.distance[start_idx]
-                    )
-                    break
-            x_positions[segment] = (current_x, current_x + segment_len)
-            current_x += segment_len
+    for segment in sorted(segments_to_plot):
+        segment_len = segment_lengths[segment]
+        x_positions[segment] = (current_x, current_x + segment_len)
+        current_x += segment_len
 
     # Now plot each band structure's segments at the correct x positions
     colors = px.colors.qualitative.Plotly
     line_styles = PLOTLY_LINE_STYLES
 
+    seen_names: set[str] = set()
     for bs_idx, (label, band_struct) in enumerate(bs_dict.items()):
         color = colors[bs_idx % len(colors)]
         line_style = line_styles[bs_idx % len(line_styles)]
 
-        for branch in band_struct.branches:
+        for branch_idx, branch in enumerate(band_struct.branches):
             start_idx = branch["start_index"]
             end_idx = branch["end_index"] + 1
 
             # Get the x-axis position for this segment
             start_label = band_struct.qpoints[start_idx].label
             end_label = band_struct.qpoints[end_idx - 1].label
-            segment = (start_label, end_label)
+            segment = (
+                branch_idx if path_mode == SET_STRICT else 0,
+                start_label,
+                end_label,
+            )
 
             if segment not in segments_to_plot:
                 continue  # Skip segments not in the segments_to_plot set
@@ -278,7 +235,6 @@ def phonon_bands(
                     color=color, width=1.5 if is_acoustic else 1, dash=line_style
                 )
                 trace_name = label
-                existing_names = {trace.name for trace in fig.data}
 
                 # Apply line style based on line_kwargs type
                 if callable(line_kwargs):
@@ -291,11 +247,8 @@ def phonon_bands(
                 elif isinstance(line_kwargs, dict):
                     # check for custom line styles for one or both modes
                     if {"acoustic", "optical"} <= set(line_kwargs):
-                        # mode_type guaranteed to be "acoustic" or "optical"
-                        # (copy since pop below must not mutate the caller's dict)
+                        # Pop names from a copy to preserve the caller's styles.
                         mode_styles = dict(line_kwargs[mode_type])
-                        # use custom trace name if provided (needs to be popped before
-                        # passed to line kwargs)
                         if mode_name := mode_styles.pop("name", None):
                             trace_name = mode_name
 
@@ -304,7 +257,6 @@ def phonon_bands(
                     else:  # Apply single style dict to all lines
                         line_defaults |= cast("dict[str, Any]", line_kwargs)
 
-                is_new_name = trace_name not in existing_names
                 fig.add_scatter(
                     x=segment_distances,
                     y=frequencies,
@@ -312,16 +264,18 @@ def phonon_bands(
                     line=line_defaults,
                     legendgroup=trace_name,
                     name=trace_name,
-                    showlegend=is_new_name,
+                    showlegend=trace_name not in seen_names,
                     **kwargs,
                 )
+                seen_names.add(trace_name)
 
     # Update x-axis ticks to show all q-points
     x_ticks, x_labels = [], []
-    for (start_label, end_label), (x_start, x_end) in sorted(
-        x_positions.items(), key=lambda x: x[1][0]
-    ):
-        if x_start not in x_ticks:
+    for (_, start_label, end_label), (x_start, x_end) in x_positions.items():
+        if x_ticks and x_start == x_ticks[-1]:
+            if x_labels[-1] != (start_label or ""):
+                x_labels[-1] += f"|{start_label or ''}"
+        else:
             x_ticks.append(x_start)
             x_labels.append(start_label or "")
         x_ticks.append(x_end)
@@ -513,37 +467,28 @@ def phonon_dos(
         return frequencies, densities
 
     fig = go.Figure()
-    cumulative_density_by_group: dict[str, np.ndarray] = {}
-    frequencies_by_group: dict[str, np.ndarray] = {}
-    seen_stack_groups: set[str] = set()
-
-    def _stack_group(trace_name: str) -> str:
-        """Return stack accumulation group for this DOS trace."""
-        if project is None:
-            return ""
-        return stack_group_by_trace.get(trace_name, "") if stack_group_by_trace else ""
+    stack_state: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for dos_name, dos_obj in dos_dict.items():
         frequencies, densities = _prepare_dos(dos_obj)
         scatter_kwargs: dict[str, Any] = {"mode": "lines"}
         if stack:
-            stack_group = _stack_group(dos_name)
-            if stack_group in frequencies_by_group and not np.array_equal(
-                frequencies, frequencies_by_group[stack_group]
-            ):
+            stack_group = (
+                stack_group_by_trace.get(dos_name, "")
+                if project is not None and stack_group_by_trace
+                else ""
+            )
+            previous = stack_state.get(stack_group)
+            if previous is not None and not np.array_equal(frequencies, previous[0]):
                 raise ValueError(
                     f"Cannot stack DOS {dos_name!r}: frequency grids differ in group "
                     f"{stack_group!r}"
                 )
-            frequencies_by_group[stack_group] = frequencies
-            densities = densities + cumulative_density_by_group.get(
-                stack_group, np.zeros_like(densities)
+            densities = densities + (
+                np.zeros_like(densities) if previous is None else previous[1]
             )
-            cumulative_density_by_group[stack_group] = densities
-            scatter_kwargs["fill"] = (
-                "tozeroy" if stack_group not in seen_stack_groups else "tonexty"
-            )
-            seen_stack_groups.add(stack_group)
+            stack_state[stack_group] = (frequencies, densities)
+            scatter_kwargs["fill"] = "tozeroy" if previous is None else "tonexty"
         fig.add_scatter(
             x=frequencies, y=densities, name=dos_name, **scatter_kwargs | kwargs
         )
@@ -645,7 +590,7 @@ def phonon_bands_and_dos(
         dos_kwargs (dict[str, Any]): Passed to Plotly's Figure.add_scatter method.
         subplot_kwargs (dict[str, Any]): Passed to Plotly's make_subplots method.
             Defaults to dict(shared_yaxes=True, column_widths=(0.8, 0.2),
-            horizontal_spacing=0.01).
+            horizontal_spacing=0.03).
         all_line_kwargs (dict[str, Any]): Passed to trace.update for each trace in
             fig.data. Modifies line appearance for all traces. Defaults to None.
         per_line_kwargs (dict[str, str]): Map of line labels to kwargs for trace.update.
@@ -692,9 +637,15 @@ def phonon_bands_and_dos(
 
     # plot density of states
     dos_fig = phonon_dos(doses, **dos_options)
-    # swap DOS x and y axes (for 90 degrees rotation)
+    # Orient DOS with frequency on the shared y-axis.
     for trace in dos_fig.data:
         trace.x, trace.y = trace.y, trace.x
+        trace.fill = {
+            "tozeroy": "tozerox",
+            "tonexty": "tonextx",
+            "tozerox": "tozeroy",
+            "tonextx": "tonexty",
+        }.get(trace.fill, trace.fill)
 
     fig.add_traces(dos_fig.data, rows=1, cols=2)
     # transfer zero line from DOS to band structure

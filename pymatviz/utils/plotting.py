@@ -12,12 +12,15 @@ Available functions:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Final, cast
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
+
+from pymatviz.colors import _CSS_NAMED_COLORS
 
 
 if TYPE_CHECKING:
@@ -43,8 +46,7 @@ PLOTLY_LINE_STYLES: Final[tuple[str, ...]] = (
 
 
 def annotate(text: str | Sequence[str], fig: go.Figure, **kwargs: Any) -> go.Figure:
-    """Annotate a plotly figure. Supports faceted plots plotly figure with
-    trace with empty strings skipped.
+    """Annotate a Plotly figure or its facets, skipping empty facet labels.
 
     Args:
         text (str): The text to use for annotation. If fig is plotly faceted, text can
@@ -71,16 +73,14 @@ def annotate(text: str | Sequence[str], fig: go.Figure, **kwargs: Any) -> go.Fig
     # assigned to an x-axis other than the primary "x")
     if any(getattr(trace, "xaxis", None) not in (None, "x") for trace in fig.data):
         for idx, trace in enumerate(fig.data):
-            # if text is str, use it for all subplots though we might want to
-            # warn since this will likely rarely be intended
             sub_text = text if isinstance(text, str) else text[idx]
             # skip traces for which no annotations were provided
             if not sub_text:
                 continue
 
-            subplot_idx = trace.xaxis[1:] or ""  # e.g. 'x2' -> '2', 'x' -> ''
-            xref = f"x{subplot_idx} domain" if subplot_idx else "x domain"
-            yref = f"y{subplot_idx} domain" if subplot_idx else "y domain"
+            subplot_idx = trace.xaxis[1:]  # e.g. 'x2' -> '2', 'x' -> ''
+            xref = f"x{subplot_idx} domain"
+            yref = f"y{subplot_idx} domain"
             fig.add_annotation(
                 text=sub_text,
                 **(dict(xref=xref, yref=yref) | text_defaults | kwargs),
@@ -98,15 +98,13 @@ def annotate(text: str | Sequence[str], fig: go.Figure, **kwargs: Any) -> go.Fig
     return fig
 
 
-def _get_plotly_font_color(fig: go.Figure) -> str:
-    """Get the font color used in a Plotly figure.
+def get_font_color(fig: go.Figure) -> str:
+    """Get the font color from a Plotly figure, its template, or the global template.
 
-    Args:
-        fig (go.Figure): A Plotly figure object.
-
-    Returns:
-        str: The font color as a string (e.g. 'black', '#000000').
+    Defaults to black when no font color is set. Raises TypeError for non-figures.
     """
+    if not isinstance(fig, go.Figure):
+        raise TypeError(f"Input must be plotly Figure, got {type(fig)=}")
     if fig.layout.font and fig.layout.font.color:
         return fig.layout.font.color
 
@@ -127,21 +125,46 @@ def _get_plotly_font_color(fig: go.Figure) -> str:
     return "black"
 
 
-def get_font_color(fig: go.Figure) -> str:
-    """Get the font color used in a Plotly figure.
+def _rgb_components(color: ColorType) -> tuple[float, float, float]:
+    """Normalize RGB(A) tuples, CSS names, hex, and rgb/rgba byte channels."""
+    if isinstance(color, str):
+        color = color.strip().lower()
+        color = _CSS_NAMED_COLORS.get(color, color)
+        if color.startswith("#"):
+            if not re.fullmatch(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?", color):
+                raise ValueError(f"Invalid hex color: {color}")
+            hex_value = color[1:]
+            step = len(hex_value) // 3
+            channels = tuple(
+                int(hex_value[idx : idx + step], 16) / (16**step - 1)
+                for idx in range(0, len(hex_value), step)
+            )
+        elif match := re.fullmatch(r"rgba?\(([^()]*)\)", color):
+            try:
+                values = tuple(float(value) for value in match[1].split(","))
+            except ValueError as exc:
+                raise ValueError(f"Invalid RGB color: {color}") from exc
+            if len(values) not in (3, 4) or (
+                len(values) == 4 and not 0 <= values[3] <= 1
+            ):
+                raise ValueError(f"Invalid RGB color: {color}")
+            channels = tuple(value / 255 for value in values[:3])
+        else:
+            raise ValueError(f"Unsupported color format: {color}")
+    elif isinstance(color, tuple) and len(color) in (3, 4):
+        try:
+            channels = tuple(float(cast("Any", channel)) for channel in color[:3])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Unsupported color tuple: {color}") from exc
+        if any(channel > 1 for channel in channels):
+            channels = tuple(channel / 255 for channel in channels)
+    else:
+        raise ValueError(f"Unsupported color type: {type(color)}")
 
-    Args:
-        fig (go.Figure): A Plotly figure object.
-
-    Returns:
-        str: The font color as a string (e.g. 'black', '#000000').
-
-    Raises:
-        TypeError: If fig is not a Plotly figure.
-    """
-    if not isinstance(fig, go.Figure):
-        raise TypeError(f"Input must be plotly Figure, got {type(fig)=}")
-    return _get_plotly_font_color(fig)
+    if not all(0 <= channel <= 1 for channel in channels):
+        raise ValueError(f"RGB channels must be finite and in [0, 255]: {color}")
+    red, green, blue = channels
+    return red, green, blue
 
 
 def luminance(color: ColorType) -> float:
@@ -149,65 +172,17 @@ def luminance(color: ColorType) -> float:
 
     Args:
         color (ColorType): RGB color tuple with values in [0, 1] or [0, 255], or a color
-            string that can be converted to RGB.
+            string (CSS name, hex, or rgb/rgba with channels in [0, 255]).
+            Alpha is ignored.
 
     Returns:
         float: Relative luminance of the color in range [0, 1].
     """
-    # Handle basic color strings
-    color_map = {
-        "black": (0, 0, 0),
-        "white": (1, 1, 1),
-        "red": (1, 0, 0),
-        "green": (0, 1, 0),
-        "blue": (0, 0, 1),
-        "yellow": (1, 1, 0),
-        "cyan": (0, 1, 1),
-        "magenta": (1, 0, 1),
-        "gray": (0.5, 0.5, 0.5),
-        "grey": (0.5, 0.5, 0.5),
-    }
-
-    if isinstance(color, str):
-        if color in color_map:
-            r, g, b = color_map[color]
-        elif color.startswith("#"):
-            # Hex color
-            color = color.lstrip("#")
-            if len(color) == 3:
-                r, g, b = tuple(int(color[i], 16) / 15 for i in range(3))
-            elif len(color) == 6:
-                r, g, b = tuple(int(color[i : i + 2], 16) / 255 for i in (0, 2, 4))
-            else:
-                raise ValueError(f"Invalid hex color: #{color}")
-        elif color.startswith("rgb("):
-            rgb_values = color.strip("rgb()").split(",")
-            r, g, b = [float(x.strip()) for x in rgb_values[:3]]
-            if r > 1 or g > 1 or b > 1:
-                r, g, b = r / 255, g / 255, b / 255
-        else:
-            raise ValueError(f"Unsupported color format: {color}")
-    elif isinstance(color, tuple) and len(color) >= 3:
-        # Extract RGB values (first 3 elements must be numeric for valid colors)
-        try:
-            r, g, b = [float(cast("Any", channel)) for channel in color[:3]]
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Unsupported color tuple: {color}") from exc
-        # Check if any value is > 1, indicating 0-255 range
-        if r > 1 or g > 1 or b > 1:
-            r, g, b = r / 255, g / 255, b / 255
-    else:
-        raise ValueError(f"Unsupported color type: {type(color)}")
-
-    def _convert_rgb_to_linear(rgb: float) -> float:
-        """Convert an RGB value to linear RGB (remove gamma correction)."""
-        return rgb / 12.92 if rgb <= 0.03928 else ((rgb + 0.055) / 1.055) ** 2.4
-
-    # Convert RGB to linear RGB (remove gamma correction)
-    r, g, b = map(_convert_rgb_to_linear, (r, g, b))
-
-    # Calculate relative luminance using WCAG 2.0 coefficients
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    red, green, blue = (
+        channel / 12.92 if channel <= 0.03928 else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in _rgb_components(color)
+    )
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
 
 def contrast_ratio(color1: ColorType, color2: ColorType) -> float:
@@ -349,16 +324,6 @@ def get_fig_xy_range(
     return x_range, y_range
 
 
-# Plotly colorscales running light -> dark, and the one that runs dark -> light. Used to
-# pick a readable annotation color when the caller names a colorscale instead of listing
-# its stops.
-_LIGHT_TO_DARK_SCALES: Final = (
-    "Greys", "Greens", "Blues", "YIGnBu", "YIOrRd", "RdBu", "Picnic", "Jet", "Hot",
-    "Blackbody", "Earth", "Electric", "Viridis", "Cividis",
-)  # fmt: skip
-_DARK_TO_LIGHT_SCALES: Final = ("Reds",)
-
-
 def _scale_end_colors(
     colorscale: Any, font_colors: Any, *, reversescale: bool
 ) -> tuple[str, str]:
@@ -366,21 +331,15 @@ def _scale_end_colors(
     white, black = "#FFFFFF", "#000000"
     if font_colors is not None and len(font_colors):
         return font_colors[0], font_colors[-1]
-    if colorscale in _LIGHT_TO_DARK_SCALES:
-        return (black, white) if reversescale else (white, black)
-    if colorscale in _DARK_TO_LIGHT_SCALES:
-        return (white, black) if reversescale else (black, white)
-    if isinstance(colorscale, list):
-        low, high = colorscale[0][1], colorscale[-1][1]
-        if reversescale:
-            low, high = high, low
-
-        def pick(end: ColorType) -> str:
-            """Choose dark text for light colorscale endpoints."""
-            return black if luminance(end) > 0.7 else white
-
-        return pick(low), pick(high)
-    return black, black
+    if colorscale is None:
+        return black, black
+    low, high = colorscale[0][1], colorscale[-1][1]
+    if reversescale:
+        low, high = high, low
+    return (
+        black if luminance(low) > 0.7 else white,
+        black if luminance(high) > 0.7 else white,
+    )
 
 
 def annotated_heatmap(
@@ -423,8 +382,18 @@ def annotated_heatmap(
     z_max = np.nanmax(z_arr) if (kw_max := kwargs.get("zmax")) is None else kw_max
     z_mid = (z_max + z_min) / 2 if (kw_mid := kwargs.get("zmid")) is None else kw_mid
 
+    labelled = x is not None or y is not None
+    trace = go.Heatmap(
+        z=z,
+        colorscale=colorscale,
+        showscale=showscale,
+        reversescale=reversescale,
+        **({"x": x, "y": y} if labelled else {}),
+        **kwargs,
+    )
+
     low_color, high_color = _scale_end_colors(
-        colorscale, font_colors, reversescale=reversescale
+        trace.colorscale, font_colors, reversescale=reversescale
     )
     annotations = [
         go.layout.Annotation(
@@ -440,16 +409,6 @@ def annotated_heatmap(
         for col_idx, val in enumerate(row)
     ]
 
-    labelled = x is not None or y is not None
-    trace = dict(
-        type="heatmap",
-        z=z,
-        colorscale=colorscale,
-        showscale=showscale,
-        reversescale=reversescale,
-        **({"x": x, "y": y} if labelled else {}),
-        **kwargs,
-    )
     axis_extra = {} if labelled else dict(showticklabels=False)
     layout = dict(
         annotations=annotations,

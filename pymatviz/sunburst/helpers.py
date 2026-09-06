@@ -58,29 +58,21 @@ def _limit_slices(
     top_slices = df_grouped[:max_slices]
     remaining_slices = df_grouped[max_slices:]
 
-    other_row = {group_col: top_slices.iloc[0][group_col]}
-    other_count = remaining_slices[count_col].sum()
-    other_row[count_col] = other_count
+    other_row = {
+        group_col: top_slices.iloc[0][group_col],
+        count_col: remaining_slices[count_col].sum(),
+    }
 
     n_hidden = len(remaining_slices)
     other_text = f"{other_label} ({n_hidden} more not shown)"
 
-    # Set the label for the other entry
+    label_col = child_col_for_other_label or (
+        Key.formula if Key.formula in df_grouped else group_col
+    )
     for col in df_grouped.columns:
-        if col == count_col:
+        if col == count_col or (col == group_col and col != label_col):
             continue
-        if col == group_col and col != child_col_for_other_label:
-            continue
-        if child_col_for_other_label and col == child_col_for_other_label:
-            other_row[col] = other_text
-        elif child_col_for_other_label:
-            # For child_col mode, set other columns to empty string
-            other_row[col] = ""
-        # Legacy mode: try formula first, then other columns
-        elif col == Key.formula:
-            other_row[col] = other_text
-        else:
-            other_row[col] = ""
+        other_row[col] = other_text if col == label_col else ""
 
     return pd.concat([top_slices, pd.DataFrame([other_row])], ignore_index=True)
 
